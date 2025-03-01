@@ -1,0 +1,7 @@
+[package]
+name = "ecu_flasher"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serialport = { version = "4.7.0", default-features = false }
