@@ -1,6 +1,6 @@
-use std::{io::Read, num::Wrapping, thread::sleep, time::Duration};
+use std::{io::Read, thread::sleep, time::Duration};
 
-use kwp::{DiagnosticMode, RawMessage, Service};
+use kwp::{DiagnosticMode, RawMessage, Service, ServiceId};
 use serialport::SerialPort;
 
 pub mod kwp;
@@ -68,6 +68,8 @@ trait KLine {
         Ok(())
     }
 
+    fn write_message(&mut self, messsage: RawMessage) -> Result<(), Self::Error>;
+
     fn write_byte(&mut self, byte: u8) -> Result<(), Self::Error>;
     fn read_byte(&mut self) -> Result<u8, Self::Error>;
 
@@ -82,6 +84,11 @@ impl KLine for Box<dyn SerialPort> {
         let mut buf = [0u8];
         self.read_exact(&mut buf)?;
         Ok(buf[0])
+    }
+
+    fn write_message(&mut self, message: RawMessage) -> Result<(), Self::Error> {
+        self.write_all(&message.to_bytes())?;
+        Ok(())
     }
 
     fn set_high(&mut self) -> Result<(), Self::Error> {
@@ -109,25 +116,37 @@ fn main() -> Result<(), serialport::Error> {
 
     println!("init done");
 
-    // let mut msg = vec![0b11000001, COM_ADDRESS, TESTER_ADDRESS, 0x81];
-
-    // let mut msg = vec![0b00000001, 0x81];
-
-    let mut msg =
-        RawMessage::new_simple_query(kwp::ServiceId::StartCommunication, Vec::new()).to_bytes();
-
-    port.write_all(dbg!(&msg)).unwrap();
+    port.write_message(RawMessage::new_query_physical(
+        kwp::ServiceId::StartCommunication,
+        COM_ADDRESS,
+        TESTER_ADDRESS,
+        Vec::new(),
+    ))?;
 
     while let Ok(m) = RawMessage::from_bytes(&mut port) {
         match m.service {
             Service::Response(kwp::ServiceResponse::StartCommunication) => {
-                msg = RawMessage::new_simple_query(
-                    kwp::ServiceId::StartDiagnosticSession,
+                port.write_message(RawMessage::new_query_none(
+                    ServiceId::StartDiagnosticSession,
                     vec![DiagnosticMode::Diagnostics as u8],
-                )
-                .to_bytes();
-
-                port.write(&msg).unwrap();
+                ))?;
+            }
+            Service::Response(kwp::ServiceResponse::StartDiagnosticSession) => {
+                port.write_message(RawMessage::new_query_none(
+                    ServiceId::ReadECUIdentification,
+                    vec![0x80],
+                ))?;
+            }
+            Service::Response(kwp::ServiceResponse::NegativeResponse) => {
+                let regarding = Service::try_from(m.data[0]).unwrap();
+                let reason = kwp::ServiceError::from_repr(m.data[1]).unwrap();
+                println!("Error regarding: {:?} because {:?}.", regarding, reason);
+            }
+            Service::Response(kwp::ServiceResponse::ReadECUIdentification) => {
+                println!("ECUID response: {}", String::from_utf8_lossy(&m.data));
+            }
+            Service::Query(q) => {
+                println!("Got echo for {:?}", q);
             }
             _ => {
                 dbg!(m);

@@ -45,8 +45,19 @@ pub struct RawMessage {
 }
 
 impl RawMessage {
-    pub fn new_simple_query(service: ServiceId, data: Vec<u8>) -> Self {
+    /// Creates a message using the one byte header mode
+    pub fn new_query_none(service: ServiceId, data: Vec<u8>) -> Self {
         Self::new_query(AddressMode::None, None, None, service, data)
+    }
+    /// Creates a message using physical addressing
+    pub fn new_query_physical(service: ServiceId, target: u8, source: u8, data: Vec<u8>) -> Self {
+        Self::new_query(
+            AddressMode::Physical,
+            Some(target),
+            Some(source),
+            service,
+            data,
+        )
     }
     pub fn new_query(
         mode: AddressMode,
@@ -123,7 +134,7 @@ impl RawMessage {
         // a message is received.
         let mut buf = [0; MAX_DATA_LENGTH + 5];
 
-        source.read(&mut buf[0..1])?;
+        source.read_exact(&mut buf[0..1])?;
 
         let format = buf[0];
 
@@ -138,7 +149,7 @@ impl RawMessage {
                 source_addr = None;
             }
             _ => {
-                source.read(&mut buf[0..2])?;
+                source.read_exact(&mut buf[0..2])?;
 
                 target_addr = Some(buf[0]);
                 source_addr = Some(buf[1]);
@@ -148,11 +159,11 @@ impl RawMessage {
         let length = if let Some(l) = hlength {
             l
         } else {
-            source.read(&mut buf[0..1])?;
+            source.read_exact(&mut buf[0..1])?;
             buf[0]
         };
 
-        source.read(&mut buf[0..1])?;
+        source.read_exact(&mut buf[0..1])?;
 
         let service = if let Some(id) = ServiceId::from_repr(buf[0]) {
             Ok(Service::Query(id))
@@ -165,15 +176,17 @@ impl RawMessage {
         // remember length is 1 + data length (includes service id)
         let data = if length > 1 {
             let dbuf = &mut buf[0..(length as usize - 1)];
-            source.read(dbuf).map_or(Err(Error::NotEnoughData), Ok)?;
+            source
+                .read_exact(dbuf)
+                .map_or(Err(Error::NotEnoughData), Ok)?;
             dbuf.iter().map(|b| *b).collect()
         } else {
             Vec::new()
         };
 
-        source.read(&mut buf[0..1])?;
+        source.read_exact(&mut buf[0..1])?;
 
-        let calc_crc: Wrapping<u8> = (&[format])
+        let crc_calc: Wrapping<u8> = (&[format])
             .iter()
             .chain(target_addr.as_ref())
             .chain(source_addr.as_ref())
@@ -186,8 +199,7 @@ impl RawMessage {
             .chain(&data)
             .map(|x| Wrapping(*x))
             .sum();
-
-        if buf[0] != calc_crc.0 {
+        if buf[0] != crc_calc.0 {
             return Err(Error::InvalidChecksum);
         }
 
@@ -249,13 +261,22 @@ pub enum ServiceError {
     TooManyAttempts = 0x36,
     /// Wait before making another security access request
     RequestingTooFast = 0x37,
-}
 
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, FromRepr)]
-pub enum OtherError {
+    /// Data link errors
+
+    /// Still working on previous request
+    BusyRepeatRequest = 0x21,
+    /// Processing not complete, still working on it
+    RoutineNotComplete = 0x23,
+    /// One or more parameter values is out of permitted range
+    RequestOutOfRange = 0x31,
+    /// Request received correctly, wait until final response is received befor sending another
+    ResponsePending = 0x78,
+    ScalingNotSupported = 0x91,
+
+    /// Other errors
     GeneralReject = 0x10,
-    FunctionNotSupported = 0x12,
+    FunctionNotSupportedOrInvalidFormat = 0x12,
     DownloadNotAccepted = 0x40,
     ImproperDownloadType = 0x41,
     CannotDownloadToAddress = 0x42,
