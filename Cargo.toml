@@ -5,3 +5,5 @@ edition = "2024"
 
 [dependencies]
 serialport = { version = "4.7.0", default-features = false }
+strum = { version = "0.27.1", features = ["derive"] }
+thiserror = "2.0.11"

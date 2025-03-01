@@ -1,11 +1,14 @@
 use std::{io::Read, num::Wrapping, thread::sleep, time::Duration};
 
+use kwp::{DiagnosticMode, RawMessage, Service};
 use serialport::SerialPort;
 
-const INIT_ADDRESS: u8 = 0x01;
-const COMM_ADDRESS: u8 = 0x10;
+pub mod kwp;
 
-const TESTER_ADDRESS: u8 = 0x7F;
+const INIT_ADDRESS: u8 = 0x01;
+const COM_ADDRESS: u8 = 0x10;
+
+const TESTER_ADDRESS: u8 = 0xF1;
 
 trait KLine {
     type Error;
@@ -97,7 +100,8 @@ impl KLine for Box<dyn SerialPort> {
 
 fn main() -> Result<(), serialport::Error> {
     let mut port = serialport::new("/dev/ttyUSB0", 10400)
-        .timeout(Duration::from_millis(2000))
+        .timeout(Duration::from_millis(300))
+        .flow_control(serialport::FlowControl::None)
         .open()
         .unwrap();
 
@@ -105,38 +109,31 @@ fn main() -> Result<(), serialport::Error> {
 
     println!("init done");
 
-    let mut msg = vec![0x81, COMM_ADDRESS, TESTER_ADDRESS, 0x10, 0x86];
+    // let mut msg = vec![0b11000001, COM_ADDRESS, TESTER_ADDRESS, 0x81];
 
-    let crc: Wrapping<u8> = msg.iter().map(|x| Wrapping(*x)).sum();
+    // let mut msg = vec![0b00000001, 0x81];
 
-    msg.push(crc.0);
+    let mut msg =
+        RawMessage::new_simple_query(kwp::ServiceId::StartCommunication, Vec::new()).to_bytes();
 
-    port.write(&msg).unwrap();
+    port.write_all(dbg!(&msg)).unwrap();
 
-    let mut first = true;
-
-    loop {
-        let mut bytes = Vec::new();
-        while let Ok(b) = port.read_byte() {
-            bytes.push(b);
-        }
-        if bytes.len() > 0 {
-            if bytes.starts_with(&msg) {
-                bytes = bytes.split_off(msg.len());
-            }
-            println!("received: {:02x?}", bytes);
-
-            if first {
-                msg = vec![0x81, COMM_ADDRESS, TESTER_ADDRESS, 0x11];
-
-                let crc: Wrapping<u8> = msg.iter().map(|x| Wrapping(*x)).sum();
-
-                msg.push(crc.0);
+    while let Ok(m) = RawMessage::from_bytes(&mut port) {
+        match m.service {
+            Service::Response(kwp::ServiceResponse::StartCommunication) => {
+                msg = RawMessage::new_simple_query(
+                    kwp::ServiceId::StartDiagnosticSession,
+                    vec![DiagnosticMode::Diagnostics as u8],
+                )
+                .to_bytes();
 
                 port.write(&msg).unwrap();
-
-                first = false;
+            }
+            _ => {
+                dbg!(m);
             }
         }
     }
+
+    Ok(())
 }
