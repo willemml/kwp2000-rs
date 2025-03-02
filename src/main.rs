@@ -1,109 +1,18 @@
-use std::{io::Read, thread::sleep, time::Duration};
+use std::{fs, io::Write, time::Duration};
 
-use kwp::{DiagnosticMode, RawMessage, Service, ServiceId};
-use serialport::SerialPort;
+use k_line::KLine;
+use kwp2000::{
+    constants::{DiagnosticMode, Service, ServiceError, ServiceId, ServiceResponse},
+    message::RawMessage,
+};
 
-pub mod kwp;
+pub mod k_line;
+pub mod kwp2000;
 
 const INIT_ADDRESS: u8 = 0x01;
 const COM_ADDRESS: u8 = 0x10;
 
 const TESTER_ADDRESS: u8 = 0xF1;
-
-trait KLine {
-    type Error;
-
-    fn send_init_5baud(&mut self, address: u8) -> Result<(), Self::Error> {
-        // Idle for 300ms before sending anything.
-        self.set_low()?;
-        sleep(Duration::from_millis(300));
-
-        // Send high bit to start transfer.
-        self.set_high()?;
-        sleep(Duration::from_millis(200));
-
-        // Send target address at 5 baud
-        self.bitbang(5, address)?;
-        Ok(())
-    }
-
-    fn init_kwp2000(&mut self, address: u8) -> Result<(), Self::Error> {
-        self.send_init_5baud(address)?;
-
-        self.wait_for_byte(0x55)?;
-
-        self.wait_for_byte(0x8F)?;
-
-        // Wait a bit before sending complement of key byte 2
-        sleep(Duration::from_millis(25));
-        self.write_byte(0xFF - 0x8F)?;
-
-        self.wait_for_byte(0xFF - address)?;
-
-        Ok(())
-    }
-
-    fn bitbang(&mut self, baud: u8, byte: u8) -> Result<(), Self::Error> {
-        let delay = Duration::from_millis(1_000 / baud as u64);
-
-        for state in (0..8).map(|n| ((1 << n) & byte) == 0) {
-            if state {
-                self.set_high()?;
-            } else {
-                self.set_low()?;
-            }
-            sleep(delay);
-        }
-
-        // Set low to allow incoming data
-        self.set_low()?;
-
-        Ok(())
-    }
-
-    fn wait_for_byte(&mut self, byte: u8) -> Result<(), Self::Error> {
-        while self.read_byte()? != byte {
-            continue;
-        }
-        Ok(())
-    }
-
-    fn write_message(&mut self, messsage: RawMessage) -> Result<(), Self::Error>;
-
-    fn write_byte(&mut self, byte: u8) -> Result<(), Self::Error>;
-    fn read_byte(&mut self) -> Result<u8, Self::Error>;
-
-    fn set_high(&mut self) -> Result<(), Self::Error>;
-    fn set_low(&mut self) -> Result<(), Self::Error>;
-}
-
-impl KLine for Box<dyn SerialPort> {
-    type Error = serialport::Error;
-
-    fn read_byte(&mut self) -> Result<u8, Self::Error> {
-        let mut buf = [0u8];
-        self.read_exact(&mut buf)?;
-        Ok(buf[0])
-    }
-
-    fn write_message(&mut self, message: RawMessage) -> Result<(), Self::Error> {
-        self.write_all(&message.to_bytes())?;
-        Ok(())
-    }
-
-    fn set_high(&mut self) -> Result<(), Self::Error> {
-        self.set_break()
-    }
-
-    fn set_low(&mut self) -> Result<(), Self::Error> {
-        self.clear_break()
-    }
-
-    fn write_byte(&mut self, byte: u8) -> Result<(), Self::Error> {
-        self.write_all(&[byte])?;
-        Ok(())
-    }
-}
 
 fn main() -> Result<(), serialport::Error> {
     let mut port = serialport::new("/dev/ttyUSB0", 10400)
@@ -117,42 +26,125 @@ fn main() -> Result<(), serialport::Error> {
     println!("init done");
 
     port.write_message(RawMessage::new_query_physical(
-        kwp::ServiceId::StartCommunication,
+        ServiceId::StartCommunication,
         COM_ADDRESS,
         TESTER_ADDRESS,
         Vec::new(),
     ))?;
 
+    let mut cleared = false;
+
+    let mut address = 0x380da0;
+
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open("ram.bin")
+        .unwrap();
+
     while let Ok(m) = RawMessage::from_bytes(&mut port) {
         match m.service {
-            Service::Response(kwp::ServiceResponse::StartCommunication) => {
+            Service::Response(ServiceResponse::StartCommunication) => {
                 port.write_message(RawMessage::new_query_none(
                     ServiceId::StartDiagnosticSession,
                     vec![DiagnosticMode::Diagnostics as u8],
                 ))?;
+                // port.write_message(RawMessage::new_query_physical(
+                //     ServiceId::SecurityAccess,
+                //     COM_ADDRESS,
+                //     TESTER_ADDRESS,
+                //     vec![0x01],
+                // ))?;
             }
-            Service::Response(kwp::ServiceResponse::StartDiagnosticSession) => {
+            Service::Response(ServiceResponse::StartDiagnosticSession) => {
+                // port.write_message(RawMessage::new_query_none(
+                //     ServiceId::ReadECUIdentification,
+                //     vec![0x80],
+                // ))?;
                 port.write_message(RawMessage::new_query_none(
-                    ServiceId::ReadECUIdentification,
-                    vec![0x80],
+                    ServiceId::DynamicallyDefineLocalIdentifier,
+                    vec![0xf0, 0x04],
                 ))?;
             }
-            Service::Response(kwp::ServiceResponse::NegativeResponse) => {
-                let regarding = Service::try_from(m.data[0]).unwrap();
-                let reason = kwp::ServiceError::from_repr(m.data[1]).unwrap();
-                println!("Error regarding: {:?} because {:?}.", regarding, reason);
+            Service::Response(ServiceResponse::DynamicallyDefineLocalIdentifier) => {
+                if cleared {
+                    port.write_message(RawMessage::new_query_physical(
+                        ServiceId::SecurityAccess,
+                        COM_ADDRESS,
+                        TESTER_ADDRESS,
+                        vec![0x01],
+                    ))?;
+                    // port.write_message(readli())?;
+                } else {
+                    port.write_message(ddli(address))?;
+                    cleared = true;
+                }
             }
-            Service::Response(kwp::ServiceResponse::ReadECUIdentification) => {
+            Service::Response(ServiceResponse::NegativeResponse) => {
+                let regarding = Service::try_from(m.data[0]).unwrap();
+                let reason = ServiceError::from_repr(m.data[1]).unwrap();
+                if regarding == Service::Query(ServiceId::SecurityAccess) {
+                    port.write_message(readli())?;
+                } else {
+                    println!("Error regarding: {:?} because {:?}.", regarding, reason);
+                }
+            }
+            Service::Response(ServiceResponse::ReadECUIdentification) => {
                 println!("ECUID response: {}", String::from_utf8_lossy(&m.data));
             }
+            Service::Response(ServiceResponse::SecurityAccess) => {
+                port.write_message(readli())?;
+                // port.write_message(RawMessage::new_query_none(
+                //     ServiceId::StartDiagnosticSession,
+                //     vec![DiagnosticMode::Diagnostics as u8],
+                // ))?;
+                // dbg!(&m);
+                // if m.data[0] == 0x01 {
+                //     let mut key = kwp2000::security_key_from_seed(&m.data[1..5]);
+                //     key.insert(0, 0x02);
+                //     port.write_message(RawMessage::new_query_none(ServiceId::SecurityAccess, key))?;
+                // } else if m.data[0] == 0x02 {
+                //     println!("Got security access");
+                //     port.write_message(RawMessage::new_query_none(
+                //         ServiceId::ReadMemoryByAddress,
+                //         vec![0x38, 0x22, 0x62],
+                //     ))?;
+                // }
+            }
+            Service::Response(ServiceResponse::ReadDataByLocalIdentifier) => {
+                println!("{:08x}: {:02x?}", address, &m.data[1..]);
+                file.write_all(&m.data[1..]).unwrap();
+                if address < 0x381000 {
+                    std::thread::sleep(Duration::from_secs(2));
+                    port.write_message(readli())?;
+                    // port.write_message(RawMessage::new_query_none(
+                    //     ServiceId::DynamicallyDefineLocalIdentifier,
+                    //     vec![0xf0, 0x04],
+                    // ))?;
+                    // address += 0x10;
+                    // cleared = false;
+                }
+            }
             Service::Query(q) => {
-                println!("Got echo for {:?}", q);
+                //println!("Got echo for {:?}", q);
             }
             _ => {
-                dbg!(m);
+                //dbg!(m);
             }
         }
     }
 
     Ok(())
+}
+fn ddli(address: u32) -> RawMessage {
+    let bytes = address.to_be_bytes();
+    let mut data = vec![0xF0, 0x03, 0x01, 0x10];
+    for i in 1..4 {
+        data.push(bytes[i]);
+    }
+    RawMessage::new_query_none(ServiceId::DynamicallyDefineLocalIdentifier, data)
+}
+
+fn readli() -> RawMessage {
+    RawMessage::new_query_none(ServiceId::ReadDataByLocalIdentifier, vec![0xF0, 0x01, 0x01])
 }

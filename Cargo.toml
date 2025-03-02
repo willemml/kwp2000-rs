@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-serialport = { version = "4.7.0", default-features = false }
+serialport = { version = "4.7.0", default-features = false, optional = true}
 strum = { version = "0.27.1", features = ["derive"] }
 thiserror = "2.0.11"
+
+[features]
+std = []
+serialport = ["std", "dep:serialport"]
+default = ["serialport"]
