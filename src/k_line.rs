@@ -1,6 +1,7 @@
 use std::time::Duration;
 
-use crate::kwp2000::message::RawMessage;
+use crate::Error;
+use crate::kwp2000::{Interface, raw_message::RawMessage};
 
 pub trait KLine {
     type Error;
@@ -22,8 +23,10 @@ pub trait KLine {
     fn init_kwp2000(&mut self, address: u8) -> Result<(), Self::Error> {
         self.send_init_5baud(address)?;
 
+        // Wait for timing byte
         self.wait_for_byte(0x55)?;
 
+        // Wait for the second key byte
         self.wait_for_byte(0x8F)?;
 
         // Wait a bit before sending complement of key byte 2
@@ -62,8 +65,6 @@ pub trait KLine {
 
     fn delay(&self, duration: Duration);
 
-    fn write_message(&mut self, message: RawMessage) -> Result<(), Self::Error>;
-
     fn write_byte(&mut self, byte: u8) -> Result<(), Self::Error>;
     fn read_byte(&mut self) -> Result<u8, Self::Error>;
 
@@ -81,11 +82,6 @@ impl KLine for Box<dyn serialport::SerialPort> {
         Ok(buf[0])
     }
 
-    fn write_message(&mut self, message: RawMessage) -> Result<(), Self::Error> {
-        self.write_all(&message.to_bytes())?;
-        Ok(())
-    }
-
     fn set_high(&mut self) -> Result<(), Self::Error> {
         self.set_break()
     }
@@ -101,5 +97,18 @@ impl KLine for Box<dyn serialport::SerialPort> {
 
     fn delay(&self, duration: Duration) {
         std::thread::sleep(duration);
+    }
+}
+
+#[cfg(feature = "serialport")]
+impl Interface for Box<dyn serialport::SerialPort> {
+    fn send_raw(&mut self, message: RawMessage) -> Result<(), Error> {
+        self.write_all(&message.to_bytes())?;
+        Ok(())
+    }
+
+    fn next_message(&mut self) -> Result<RawMessage, Error> {
+        let m = RawMessage::from_bytes(self)?;
+        Ok(m)
     }
 }

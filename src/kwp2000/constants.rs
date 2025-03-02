@@ -1,5 +1,24 @@
-use super::Error;
+use crate::Error;
 use strum::FromRepr;
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DynamicDefinitionMode {
+    DefineByLocalIdentifier = 0x01,
+    DefineByCommonIdentifier = 0x02,
+    DefineByMemoryAddress = 0x03,
+    ClearDynamicallyDefinedLocalIdentifier = 0x04,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalIdentifierReadMode {
+    Single = 0x01,
+    Slow = 0x02,
+    Medium = 0x03,
+    Fast = 0x04,
+    Stop = 0x05,
+}
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,17 +41,20 @@ pub enum DiagnosticMode {
 }
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, FromRepr)]
-pub enum DataLinkError {
-    /// Still working on previous request
-    BusyRepeatRequest = 0x21,
-    /// Processing not complete, still working on it
-    RoutineNotComplete = 0x23,
-    /// One or more parameter values is out of permitted range
-    RequestOutOfRange = 0x31,
-    /// Request received correctly, wait until final response is received befor sending another
-    ResponsePending = 0x78,
-    ScalingNotSupported = 0x91,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
+pub enum SecuritySeedLevel {
+    Seed1 = 0x01,
+    Seed2 = 0x03,
+    Seed3 = 0x05,
+    Seed4 = 0x07,
+}
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
+pub enum SecurityKeyLevel {
+    Key1 = 0x02,
+    Key2 = 0x04,
+    Key3 = 0x06,
+    Key4 = 0x08,
 }
 
 #[repr(u8)]
@@ -101,6 +123,8 @@ macro_rules! ServiceEnums {
 }
 
 // service name = hexword query => hexword response
+//
+// NegativeResponse = 0x7F is always added to the response list
 ServiceEnums! {
     RequestCurrentPowertrainDiagnosticData = 0x01 => 0x41,
     RequestPowertrainFreezeFrameData = 0x02 => 0x42,
