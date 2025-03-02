@@ -1,6 +1,5 @@
 pub mod constants;
 pub mod message;
-pub mod security;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -18,15 +17,15 @@ pub enum Error {
 pub fn security_key_from_seed(seed: &[u8]) -> Vec<u8> {
     assert_eq!(seed.len(), 4);
 
-    let mut key: u64 = seed
+    let mut key: u32 = seed
         .iter()
-        .map(|n| *n as u64)
-        .enumerate()
+        .map(|n| *n as u32)
         .rev()
+        .enumerate()
         .map(|(i, b)| b << i * 8)
         .sum();
 
-    const EXT_RAM_KEY: u64 = 0x5FBD5DBD;
+    const EXT_RAM_KEY: u32 = 0x5FBD5DBD;
 
     const LOOP_COUNT: usize = 5;
 
@@ -40,5 +39,5 @@ pub fn security_key_from_seed(seed: &[u8]) -> Vec<u8> {
         }
     }
 
-    key.to_le_bytes().into()
+    key.to_be_bytes().into()
 }
