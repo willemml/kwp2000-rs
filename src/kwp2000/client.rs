@@ -7,7 +7,7 @@ use crate::{
     },
 };
 
-use super::{Interface, message::Message, response::Response};
+use super::{Interface, constants::DiagnosticMode, message::Message, response::Response};
 
 pub struct Client<I: Interface> {
     pub interface: I,
@@ -31,7 +31,34 @@ macro_rules! message_chain {
 }
 
 impl<I: Interface> Client<I> {
-    fn test(&mut self) -> Result<(), Error> {
+    pub fn disconnect(&mut self) -> Result<(), Error> {
+        message_chain! {self.interface => {
+            Message::StopDiagnosticSession => {
+                Response::DiagnosticSessionStopped => {}
+                Response::Error(_) => {}
+            }
+            Message::StopCommunication => {
+                Response::CommunicationStopped => {}
+            }
+        }}
+
+        Ok(())
+    }
+
+    pub fn switch_mode(&mut self, new_mode: DiagnosticMode) -> Result<(), Error> {
+        message_chain! {self.interface => {
+            Message::StartDiagnosticSession(new_mode, None) => {
+                Response::StartedDiagnosticMode(mode, _) => {
+                    if mode == new_mode {
+                        Ok(())
+                    } else {
+                        Err(Error::UnexpectedMode)
+                    }
+                }
+            }
+        }}
+    }
+    pub fn clear_security_wait(&mut self) -> Result<(), Error> {
         message_chain! {self.interface => {
             Message::ClearLocalIdentifier(0xF0) => {
                 Response::LocalIdentifierDefined(0xF0) => {}
@@ -45,7 +72,7 @@ impl<I: Interface> Client<I> {
         }}
     }
 
-    pub fn test2(&mut self) -> Result<(), Error> {
+    pub fn get_security_access(&mut self) -> Result<(), Error> {
         let seed_arr;
         message_chain! {self.interface => {
             Message::RequestSecuritySeed => {
@@ -64,56 +91,10 @@ impl<I: Interface> Client<I> {
                     error: ServiceError::TooManyAttempts | ServiceError::RequestingTooFast,
                     service: ServiceId::SecurityAccess,
                 }) => {
-                    self.test()?;
-                    return self.test2();
+                    self.clear_security_wait()?;
+                    return self.get_security_access();
                 }
             }
         }}
-    }
-
-    fn clear_security_wait(&mut self) -> Result<(), Error> {
-        self.interface.send(Message::ClearLocalIdentifier(0xF0))?;
-
-        match self.interface.next_response()? {
-            Response::LocalIdentifierDefined(id) => self
-                .interface
-                .send(Message::DefineLocalIdentifierAddress(id, 2, 0x380da8))?,
-            _ => return Err(Error::UnexpectedResponse),
-        }
-
-        match self.interface.next_response()? {
-            Response::LocalIdentifierDefined(id) => {
-                self.interface
-                    .send(Message::WriteLocalIdentifier(id, vec![0, 0]))?;
-                Ok(())
-            }
-            _ => Err(Error::UnexpectedResponse),
-        }
-    }
-
-    pub fn get_security_access(&mut self) -> Result<(), Error> {
-        self.interface.send(Message::RequestSecuritySeed)?;
-        match self.interface.next_response()? {
-            Response::SecurityAccessSeed(_, seed) => {
-                self.interface
-                    .send(Message::SendSecurityKey(u32::from_be_bytes(
-                        seed.to_vec().try_into().unwrap(),
-                    )))?
-            }
-            Response::SecurityAccessGranted(_) => return Ok(()),
-            _ => return Err(Error::UnexpectedResponse),
-        }
-
-        match self.interface.next_response()? {
-            Response::Error(ProcessError {
-                error: ServiceError::TooManyAttempts | ServiceError::RequestingTooFast,
-                service: ServiceId::SecurityAccess,
-            }) => {
-                self.clear_security_wait()?;
-                self.get_security_access()
-            }
-            Response::SecurityAccessGranted(_) => Ok(()),
-            _ => Err(Error::UnexpectedResponse),
-        }
     }
 }
