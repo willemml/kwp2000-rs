@@ -1,9 +1,10 @@
 use super::raw_message::RawMessage;
-use super::{calculate_baud_rate_byte, constants::*};
+use super::{baud_rate_to_byte, constants::*};
 
 pub enum Message {
     /// optional baudrate
     StartDiagnosticSession(DiagnosticMode, Option<u32>),
+    StopCommunication,
     RequestSecuritySeed,
     ClearLocalIdentifier(u8),
     /// identifier, mode, maximum response count
@@ -14,6 +15,7 @@ pub enum Message {
     SendSecurityKey(u32),
     /// whether or not server should respond
     TesterPresent(bool),
+    StopDiagnosticSession,
 }
 
 impl Message {
@@ -21,10 +23,13 @@ impl Message {
         let service;
         let mut data: Vec<u8> = vec![];
         match self {
+            Message::StopDiagnosticSession => {
+                service = ServiceId::StopDiagnosticSession;
+            }
             Message::StartDiagnosticSession(diagnostic_mode, baud) => {
                 service = ServiceId::StartDiagnosticSession;
                 data.push(diagnostic_mode as u8);
-                baud.map(|b| data.push(calculate_baud_rate_byte(b)));
+                baud.map(|b| data.push(baud_rate_to_byte(b)));
             }
             Message::RequestSecuritySeed => {
                 service = ServiceId::SecurityAccess;
@@ -69,6 +74,7 @@ impl Message {
                 service = ServiceId::TesterPresent;
                 data.push(if respond { 0x01 } else { 0x02 });
             }
+            Message::StopCommunication => service = ServiceId::StopCommunication,
         }
         RawMessage::new_query(service, data)
     }

@@ -107,8 +107,8 @@ impl Interface for Box<dyn serialport::SerialPort> {
         Ok(())
     }
 
-    fn next_message(&mut self) -> Result<RawMessage, Error> {
-        let m = RawMessage::from_bytes(self)?;
+    fn next_raw_message(&mut self) -> Result<RawMessage, Error> {
+        let m = RawMessage::read_from_bytes(self)?;
         Ok(m)
     }
 }

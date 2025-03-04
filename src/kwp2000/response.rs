@@ -1,6 +1,7 @@
 use super::constants::*;
 use super::raw_message::RawMessage;
 use crate::Error;
+use crate::kwp2000::baud_rate_from_byte;
 
 pub fn from_raw(mut message: RawMessage) -> Result<Response, Error> {
     Ok(match &message.service {
@@ -16,6 +17,7 @@ pub fn from_raw(mut message: RawMessage) -> Result<Response, Error> {
             }
             ServiceResponse::StartDiagnosticSession => Response::StartedDiagnosticMode(
                 DiagnosticMode::from_repr(message.data[0]).ok_or(Error::UnexpectedValue)?,
+                message.data.get(1).map(|x| baud_rate_from_byte(*x)),
             ),
             ServiceResponse::ReadDataByLocalIdentifier => {
                 Response::LocalIdentifierRead(message.data[0], message.data.split_off(1))
@@ -42,6 +44,8 @@ pub fn from_raw(mut message: RawMessage) -> Result<Response, Error> {
             ServiceResponse::WriteDataByLocalIdentifier => {
                 Response::LocalIdentifierWritten(message.data[0])
             }
+            ServiceResponse::StopCommunication => Response::CommunicationStopped,
+            ServiceResponse::StopDiagnosticSession => Response::DiagnosticSessionStopped,
             _ => return Err(Error::NotImplemented),
         },
     })
@@ -63,21 +67,24 @@ impl ProcessError {
 
 #[derive(Debug, Clone)]
 pub enum Response {
-    StartedDiagnosticMode(DiagnosticMode),
+    DiagnosticSessionStopped,
+    CommunicationStopped,
+    /// Query type messages from the server are all considered echoes
+    Echo(RawMessage),
+    Error(ProcessError),
+    LocalIdentifierDefined(u8),
+    LocalIdentifierRead(u8, Vec<u8>),
+    LocalIdentifierWritten(u8),
+    /// If the returned SecurityKeyLevel is greater than 1, there are higher
+    /// levels of access available.
+    SecurityAccessGranted(SecurityKeyLevel),
     /// If the returned SecuritySeedLevel is greater than 1, there are higher
     /// levels of access available. If received a security access seed with
     /// a number greater than 1, send the key with one access level higher
     /// than originally requested.
     SecurityAccessSeed(SecuritySeedLevel, Vec<u8>),
-    /// If the returned SecurityKeyLevel is greater than 1, there are higher
-    /// levels of access available.
-    SecurityAccessGranted(SecurityKeyLevel),
-    LocalIdentifierDefined(u8),
-    LocalIdentifierWritten(u8),
-    LocalIdentifierRead(u8, Vec<u8>),
+    /// mode, baud rate
+    StartedDiagnosticMode(DiagnosticMode, Option<u32>),
     StillProcessing(ServiceId),
-    Error(ProcessError),
     TesterPresent,
-    /// Query type messages from the server are all considered echoes
-    Echo(RawMessage),
 }

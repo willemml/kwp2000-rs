@@ -106,7 +106,7 @@ impl RawMessage {
         bytes
     }
 
-    pub fn from_bytes<R: Read>(source: &mut R) -> Result<Self, Error> {
+    pub fn read_from_bytes<R: Read>(source: &mut R) -> Result<Self, Error> {
         // Buffer with enough space to hold an entire message, this includes:
         // - the one byte format header,
         // - the target address (optional),
