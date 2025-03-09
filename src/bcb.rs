@@ -1,3 +1,20 @@
+//! Mostly a re-implementation of what was done in the NefMoto Flasher software.
+//! The biggest difference is that my implementation should be zero copy.
+//!
+//! This is Bosch BCB Type 1 compression with a simple XOR encryption.
+//! ME7 uses "GEHEIM" (secret in German) as the encryption key.
+//! See here on NefMoto: http://nefariousmotorsports.com/forum/index.php?topic=23501.msg169475#msg169475
+//!
+//! The header byte on the first data transfer of a sector is put before the compressed data and then it is all encrypted together.
+//!
+//! This post says that BCB Type 1 is similar to Nintendo's LZSS. But it's quite different
+//! because LZSS uses a dictionary of sequences while BCB only compresses immediately repeating
+//! bytes. There may be some useful information in the thread so I will link it anyways.
+//! http://nefariousmotorsports.com/forum/index.php?topic=6583.msg123050#msg123050
+//!
+//! See link for original code:
+//! https://github.com/NefMoto/NefMotoOpenSource/blob/9dfa4f32d9d68e0c9d32fed69a62a224c2f39d9f/Communication/KWP2000Actions.cs#L3383
+
 use std::io::Write;
 
 use crate::Error;
