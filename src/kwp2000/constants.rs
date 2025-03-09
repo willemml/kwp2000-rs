@@ -75,15 +75,11 @@ pub enum DiagnosticMode {
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
-pub enum SecuritySeedLevel {
+pub enum SecurityLevel {
     Seed1 = 0x01,
     Seed2 = 0x03,
     Seed3 = 0x05,
     Seed4 = 0x07,
-}
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
-pub enum SecurityKeyLevel {
     Key1 = 0x02,
     Key2 = 0x04,
     Key3 = 0x06,

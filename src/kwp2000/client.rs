@@ -24,7 +24,7 @@ macro_rules! message_chain {
 
             match $interface.next_response()? {
                 $($response => $respond,)*
-                r => {dbg!(r); return Err(Error::UnexpectedResponse);},
+                _ => return Err(Error::UnexpectedResponse),
             }
         )*
     };

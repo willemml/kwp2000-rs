@@ -58,6 +58,7 @@ pub enum Message {
         /// resolution: 0.5ms/bit
         p4min: u8,
     },
+    SendData(Vec<u8>),
 }
 
 impl Message {
@@ -65,6 +66,10 @@ impl Message {
         let service;
         let mut data: Vec<u8> = vec![];
         match self {
+            Self::SendData(bytes) => {
+                service = ServiceId::TransferData;
+                data = bytes;
+            }
             Self::ChangeTimingParameters {
                 p2min,
                 p2max,

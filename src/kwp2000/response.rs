@@ -52,12 +52,11 @@ pub fn from_raw(mut message: RawMessage) -> Result<Response, Error> {
                     || message.data[1..].iter().max().map_or(false, |m| m == &0)
                 {
                     Response::SecurityAccessGranted(
-                        SecurityKeyLevel::from_repr(message.data[0])
-                            .ok_or(Error::UnexpectedValue)?,
+                        SecurityLevel::from_repr(message.data[0]).ok_or(Error::UnexpectedValue)?,
                     )
                 } else {
-                    let seed_level = SecuritySeedLevel::from_repr(message.data[0])
-                        .ok_or(Error::UnexpectedValue)?;
+                    let seed_level =
+                        SecurityLevel::from_repr(message.data[0]).ok_or(Error::UnexpectedValue)?;
 
                     Response::SecurityAccessSeed(seed_level, message.data.split_off(1))
                 }
@@ -71,7 +70,14 @@ pub fn from_raw(mut message: RawMessage) -> Result<Response, Error> {
             ServiceResponse::StopCommunication => Response::CommunicationStopped,
             ServiceResponse::StopDiagnosticSession => Response::DiagnosticSessionStopped,
             ServiceResponse::RequestUpload => Response::UploadConfirmation(message.data[0]),
-            ServiceResponse::TransferData => Response::DataTransfer(message.data),
+            ServiceResponse::RequestDownload => Response::DownloadConfirmation(message.data[0]),
+            ServiceResponse::TransferData => {
+                if message.data.is_empty() {
+                    Response::ReadyForMoreData
+                } else {
+                    Response::DataTransfer(message.data)
+                }
+            }
             _ => {
                 dbg!(message);
                 return Err(Error::NotImplemented);
@@ -107,20 +113,23 @@ pub enum Response {
     LocalIdentifierWritten(u8),
     /// If the returned SecurityKeyLevel is greater than 1, there are higher
     /// levels of access available.
-    SecurityAccessGranted(SecurityKeyLevel),
+    SecurityAccessGranted(SecurityLevel),
     /// If the returned SecuritySeedLevel is greater than 1, there are higher
     /// levels of access available. If received a security access seed with
     /// a number greater than 1, send the key with one access level higher
     /// than originally requested.
-    SecurityAccessSeed(SecuritySeedLevel, Vec<u8>),
+    SecurityAccessSeed(SecurityLevel, Vec<u8>),
     /// mode, baud rate
     StartedDiagnosticMode(DiagnosticMode, Option<u32>),
     StillProcessing(ServiceId),
     TesterPresent,
     /// Data response for request upload
     DataTransfer(Vec<u8>),
+    ReadyForMoreData,
     /// Maximum block length returned
     UploadConfirmation(u8),
+    /// Maximum block length to send
+    DownloadConfirmation(u8),
     /// See the Message enum for details
     TimingParameters {
         kind: TimingParameter,

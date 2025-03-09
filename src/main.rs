@@ -1,18 +1,22 @@
-use std::{fs::OpenOptions, io::Write, time::Duration};
+use std::{fs::OpenOptions, io::Read, time::Duration};
 
 use k_line::KLine;
 use kwp2000::{
     Interface,
     client::Client,
-    constants::{CompressionFormat, DiagnosticMode, EncryptionFormat},
+    constants::{
+        CompressionFormat, DiagnosticMode, EncryptionFormat, ServiceError, ServiceId,
+        TimingParameter,
+    },
     message::{Message, TransferType},
-    response::Response,
+    response::{ProcessError, Response},
 };
 
+pub mod bcb;
 pub mod k_line;
 pub mod kwp2000;
 
-mod memory_layout {
+pub mod memory_layout {
     pub const BASE_ADDRESS: u32 = 8388608;
     pub const SIZE: u32 = 1048576;
 
@@ -20,6 +24,8 @@ mod memory_layout {
         16384, 8192, 8192, 32768, 65536, 65536, 65536, 65536, 65536, 65536, 65536, 65536, 65536,
         65536, 65536, 65536, 65536, 65536, 65536,
     ];
+
+    pub const KEY: &[u8; 6] = b"GEHEIM";
 }
 
 const INIT_ADDRESS: u8 = 0x01;
@@ -66,59 +72,100 @@ fn main() -> Result<(), Error> {
 
     if let Ok(_) = client.get_security_access() {
         println!("got security access");
+    } else {
+        println!("security failed");
     }
+
+    println!("switching to programming mode");
 
     client.switch_mode(DiagnosticMode::Programming, Some(38400))?;
 
     println!("in programming mode");
 
-    client.interface.send(Message::GetDefaultTiming)?;
-    dbg!(client.interface.next_response()?);
     client.interface.send(Message::GetTimingLimits)?;
-    dbg!(client.interface.next_response()?);
-    client.interface.send(Message::GetCurrentTiming)?;
-    dbg!(client.interface.next_response()?);
-    client.interface.send(Message::ChangeTimingParameters {
-        p2min: 0,
-        p2max: 40,
-        p3min: 0,
-        p3max: 20,
-        p4min: 0,
-    })?;
-    dbg!(client.interface.next_response()?);
+
+    if let Response::TimingParameters {
+        kind: TimingParameter::Limits,
+        p2min,
+        p2max,
+        p3min,
+        p3max,
+        p4min,
+    } = client.interface.next_response()?
+    {
+        client.interface.send(Message::ChangeTimingParameters {
+            p2min,
+            p2max,
+            p3min,
+            p3max,
+            p4min,
+        })?;
+        client.interface.next_response()?;
+        println!("configured timings");
+    }
 
     client.get_security_access()?;
 
     println!("have pogramming security access");
 
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .open("memory_read.bin")?;
+    let mut file = OpenOptions::new().read(true).open("write_test.bin")?;
 
     let mut address = memory_layout::BASE_ADDRESS;
     for (n, size) in memory_layout::SECTORS.into_iter().enumerate() {
-        println!("reading sector {} of {}", n, memory_layout::SECTORS.len());
+        println!(
+            "starting sector {} of {} with size {}",
+            n + 1,
+            memory_layout::SECTORS.len(),
+            size
+        );
         client.interface.send(Message::RequestDataTransfer {
             address,
             size,
-            compression: CompressionFormat::Uncompressed,
-            encryption: EncryptionFormat::Unencrypted,
-            transfer_type: TransferType::Upload,
+            compression: CompressionFormat::Bosch,
+            encryption: EncryptionFormat::Bosch,
+            transfer_type: TransferType::Download,
         })?;
+        let mut enc_index = 0;
+        let mut max_len = 0;
+
+        let mut data_buf = Vec::with_capacity(size as usize);
+        file.read_exact(&mut data_buf)?;
+
+        // uncompressed bytes sent so far
+        let mut sent_bytes = 0;
         while let Ok(m) = client.interface.next_response() {
-            if let Response::UploadConfirmation(_) = m {
-                client.interface.send(Message::RequestData)?;
-            } else if let Response::DataTransfer(d) = m {
-                if !d.is_empty() {
-                    file.write(&d)?;
-                    client.interface.send(Message::RequestData)?;
-                } else {
-                    break;
-                }
+            let send = if let Response::DownloadConfirmation(max) = m {
+                max_len = max as usize;
+                Some(true)
+            } else if let Response::ReadyForMoreData = m {
+                Some(false)
+            } else if let Response::Error(ProcessError {
+                error: ServiceError::RoutineNotComplete,
+                service: ServiceId::RequestDownload,
+            }) = m
+            {
+                continue;
             } else {
                 dbg!(m);
+                client.disconnect()?;
                 panic!("unexpected");
+            };
+
+            if let Some(first) = send {
+                if sent_bytes >= data_buf.len() {
+                    break;
+                }
+                let (sent, transfer_block) = bcb::encrypt_and_compress(
+                    max_len,
+                    &mut data_buf[sent_bytes..],
+                    &mut enc_index,
+                    memory_layout::KEY,
+                    first,
+                )?;
+
+                client.interface.send(Message::SendData(transfer_block))?;
+
+                sent_bytes += sent;
             }
         }
         address += size;
