@@ -7,6 +7,30 @@ pub fn from_raw(mut message: RawMessage) -> Result<Response, Error> {
     Ok(match &message.service {
         Service::Query(_) => Response::Echo(message),
         Service::Response(service_response) => match service_response {
+            ServiceResponse::AccessTimingParameter => {
+                let kind = TimingParameter::from_repr(message.data[0]).unwrap();
+                if kind == TimingParameter::Defaults {
+                    Response::TimingRestoredToDefault
+                } else if kind == TimingParameter::Set {
+                    Response::TimingSet
+                } else {
+                    Response::TimingParameters {
+                        kind,
+                        p2min: message.data[1],
+                        p2max: message.data[2],
+                        p3min: message.data[3],
+                        p3max: message.data[4],
+                        p4min: message.data[5],
+                    }
+                }
+            }
+            ServiceResponse::ReadMemoryByAddress => {
+                let mut bytes = [0u8; 4];
+                for i in 3..0 {
+                    bytes[i] = message.data.pop().ok_or(Error::NotEnoughData)?;
+                }
+                Response::MemoryAddressRead(u32::from_be_bytes(bytes), message.data)
+            }
             ServiceResponse::NegativeResponse => {
                 let error = ProcessError::from_bytes(&message.data)?;
                 if error.error == ServiceError::ResponsePending {
@@ -46,7 +70,12 @@ pub fn from_raw(mut message: RawMessage) -> Result<Response, Error> {
             }
             ServiceResponse::StopCommunication => Response::CommunicationStopped,
             ServiceResponse::StopDiagnosticSession => Response::DiagnosticSessionStopped,
-            _ => return Err(Error::NotImplemented),
+            ServiceResponse::RequestUpload => Response::UploadConfirmation(message.data[0]),
+            ServiceResponse::TransferData => Response::DataTransfer(message.data),
+            _ => {
+                dbg!(message);
+                return Err(Error::NotImplemented);
+            }
         },
     })
 }
@@ -67,6 +96,7 @@ impl ProcessError {
 
 #[derive(Debug, Clone)]
 pub enum Response {
+    MemoryAddressRead(u32, Vec<u8>),
     DiagnosticSessionStopped,
     CommunicationStopped,
     /// Query type messages from the server are all considered echoes
@@ -87,4 +117,19 @@ pub enum Response {
     StartedDiagnosticMode(DiagnosticMode, Option<u32>),
     StillProcessing(ServiceId),
     TesterPresent,
+    /// Data response for request upload
+    DataTransfer(Vec<u8>),
+    /// Maximum block length returned
+    UploadConfirmation(u8),
+    /// See the Message enum for details
+    TimingParameters {
+        kind: TimingParameter,
+        p2min: u8,
+        p2max: u8,
+        p3min: u8,
+        p3max: u8,
+        p4min: u8,
+    },
+    TimingRestoredToDefault,
+    TimingSet,
 }

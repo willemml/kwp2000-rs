@@ -11,8 +11,41 @@ pub enum DynamicDefinitionMode {
 }
 
 #[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromRepr)]
+pub enum TimingParameter {
+    Limits = 0,
+    Defaults = 1,
+    Read = 2,
+    Set = 3,
+}
+
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocalIdentifierReadMode {
+pub enum CompressionFormat {
+    Uncompressed = 0x00,
+    Bosch = 0x10,
+    Hitachi = 0x20,
+    Marelli = 0x30,
+    Lucas = 0x40,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncryptionFormat {
+    Unencrypted = 0x00,
+    Bosch = 0x01,
+    Hitachi = 0x02,
+    Marelli = 0x03,
+    Lucas = 0x04,
+}
+
+pub const fn data_format_byte(compression: CompressionFormat, encryption: EncryptionFormat) -> u8 {
+    compression as u8 | encryption as u8
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadMode {
     Single = 0x01,
     Slow = 0x02,
     Medium = 0x03,

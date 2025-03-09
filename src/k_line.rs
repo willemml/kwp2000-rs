@@ -73,7 +73,7 @@ pub trait KLine {
 }
 
 #[cfg(feature = "serialport")]
-impl KLine for Box<dyn serialport::SerialPort> {
+impl<A: serialport::SerialPort> KLine for A {
     type Error = serialport::Error;
 
     fn read_byte(&mut self) -> Result<u8, Self::Error> {
@@ -101,7 +101,7 @@ impl KLine for Box<dyn serialport::SerialPort> {
 }
 
 #[cfg(feature = "serialport")]
-impl Interface for Box<dyn serialport::SerialPort> {
+impl<A: serialport::SerialPort + std::io::Read> Interface for A {
     fn send_raw(&mut self, message: RawMessage) -> Result<(), Error> {
         self.write_all(&message.to_bytes())?;
         Ok(())
@@ -110,5 +110,10 @@ impl Interface for Box<dyn serialport::SerialPort> {
     fn next_raw_message(&mut self) -> Result<RawMessage, Error> {
         let m = RawMessage::read_from_bytes(self)?;
         Ok(m)
+    }
+
+    fn switch_baud(&mut self, baud_rate: u32) -> Result<(), Error> {
+        self.set_baud_rate(baud_rate)?;
+        Ok(())
     }
 }

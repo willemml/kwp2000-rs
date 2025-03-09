@@ -11,6 +11,7 @@ pub mod raw_message;
 pub mod response;
 
 pub trait Interface {
+    fn switch_baud(&mut self, baud_rate: u32) -> Result<(), Error>;
     fn send_raw(&mut self, message: RawMessage) -> Result<(), Error>;
     fn send(&mut self, message: Message) -> Result<(), Error> {
         self.send_raw(message.raw())
@@ -73,13 +74,13 @@ pub fn security_key_from_seed(seed: [u8; 4]) -> u32 {
 
 /// https://github.com/NefMoto/NefMotoOpenSource/blob/9dfa4f32d9d68e0c9d32fed69a62a224c2f39d9f/Communication/KWP2000Actions.cs#L560
 pub fn baud_rate_to_byte(baud_rate: u32) -> u8 {
-    let base: u8 = (baud_rate * 32 / 6400) as u8;
-    let mut best_scalar_distance = 64.0;
+    let base = baud_rate * 32 / 6400;
+    let mut best_scalar_distance = 1.0;
     let mut best_exp = 0;
     let mut best_exp_result = 1;
-    for exp in 7..=0 {
-        let exp_result: u32 = 1 << exp;
-        if exp_result < base as u32 {
+    for exp in (0..=7).rev() {
+        let exp_result = 1 << exp;
+        if exp_result < base {
             let scalar = base as f64 / exp_result as f64;
             if scalar < 64.0 && scalar > 32.0 {
                 let scalar_distance = scalar - scalar.floor();
@@ -92,9 +93,9 @@ pub fn baud_rate_to_byte(baud_rate: u32) -> u8 {
         }
     }
 
-    let z = (base as u32 / best_exp_result) - 32;
+    let z = (base / best_exp_result) - 32;
 
-    (((best_exp & 0x7) << 5) | (z & 0xF1)) as u8
+    (((best_exp & 0x7) << 5) | (z & 0x1F)) as u8
 }
 
 /// https://github.com/NefMoto/NefMotoOpenSource/blob/9dfa4f32d9d68e0c9d32fed69a62a224c2f39d9f/Communication/KWP2000Actions.cs#L535

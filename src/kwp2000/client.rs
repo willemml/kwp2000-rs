@@ -45,10 +45,17 @@ impl<I: Interface> Client<I> {
         Ok(())
     }
 
-    pub fn switch_mode(&mut self, new_mode: DiagnosticMode) -> Result<(), Error> {
+    pub fn switch_mode(
+        &mut self,
+        new_mode: DiagnosticMode,
+        baud_rate: Option<u32>,
+    ) -> Result<(), Error> {
         message_chain! {self.interface => {
-            Message::StartDiagnosticSession(new_mode, None) => {
-                Response::StartedDiagnosticMode(mode, _) => {
+            Message::StartDiagnosticSession(new_mode, baud_rate) => {
+                Response::StartedDiagnosticMode(mode, new_baud) => {
+                    if let Some(baud) = new_baud {
+                        self.interface.switch_baud(baud)?;
+                    }
                     if mode == new_mode {
                         Ok(())
                     } else {
