@@ -101,7 +101,7 @@ impl<A: serialport::SerialPort> KLine for A {
 }
 
 #[cfg(feature = "serialport")]
-impl<A: serialport::SerialPort + std::io::Read> Interface for A {
+impl<A: serialport::SerialPort + std::io::Read + std::fmt::Debug> Interface for A {
     fn send_raw(&mut self, message: RawMessage) -> Result<(), Error> {
         self.write_all(&message.to_bytes())?;
         Ok(())

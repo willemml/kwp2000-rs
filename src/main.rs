@@ -2,19 +2,25 @@ use std::{fs::OpenOptions, io::Read, time::Duration};
 
 use k_line::KLine;
 use kwp2000::{
-    Interface,
     client::Client,
-    constants::{
-        CompressionFormat, DiagnosticMode, EncryptionFormat, ServiceError, ServiceId,
-        TimingParameter,
-    },
-    message::{Message, TransferType},
+    constants::{ServiceError, ServiceId},
     response::{ProcessError, Response},
 };
 
 pub mod bcb;
 pub mod k_line;
 pub mod kwp2000;
+
+pub const KEY: &[u8; 6] = b"GEHEIM";
+
+pub const INIT_ADDRESS: u8 = 0x01;
+
+#[derive(Debug, Clone)]
+pub struct MemoryLayout {
+    pub base_address: u32,
+    pub size: u32,
+    pub sectors: Vec<u32>,
+}
 
 pub mod memory_layout {
     pub const BASE_ADDRESS: u32 = 8388608;
@@ -24,18 +30,14 @@ pub mod memory_layout {
         16384, 8192, 8192, 32768, 65536, 65536, 65536, 65536, 65536, 65536, 65536, 65536, 65536,
         65536, 65536, 65536, 65536, 65536, 65536,
     ];
-
-    pub const KEY: &[u8; 6] = b"GEHEIM";
 }
-
-const INIT_ADDRESS: u8 = 0x01;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("new diagnostic mode not expected")]
     UnexpectedMode,
     #[error("response not expected for given command")]
-    UnexpectedResponse,
+    UnexpectedResponse(Response),
     #[error("command being processed does not match last command sent")]
     UnexpectedPending,
     #[error("unexpected value")]
@@ -50,6 +52,8 @@ pub enum Error {
     InvalidService,
     #[error("unknown service error type")]
     InvalidServiceError,
+    #[error("security timeout in effect")]
+    SecurityTimout,
     #[error("io error")]
     Io(#[from] std::io::Error),
     #[cfg(feature = "serialport")]
@@ -68,47 +72,35 @@ fn main() -> Result<(), Error> {
 
     println!("init done");
 
-    let mut client = Client { interface: port };
-
-    if let Ok(_) = client.get_security_access() {
-        println!("got security access");
-    } else {
-        println!("security failed");
-    }
-
-    println!("switching to programming mode");
-
-    client.switch_mode(DiagnosticMode::Programming, Some(38400))?;
+    let mut client = match Client::new(Box::new(port)).security_access_timeout_bypass() {
+        Ok(c) => c.programming_mode(Some(38400)).unwrap(),
+        Err((c, e)) => {
+            if let Error::UnexpectedResponse(Response::Error(ProcessError {
+                service: ServiceId::SecurityAccess,
+                error: ServiceError::ServiceNotSupported,
+            })) = e
+            {
+                c.programming_mode(Some(38400)).unwrap()
+            } else {
+                panic!("{:?}", e);
+            }
+        }
+    };
 
     println!("in programming mode");
 
-    client.interface.send(Message::GetTimingLimits)?;
+    client.use_fastest_timing().unwrap();
 
-    if let Response::TimingParameters {
-        kind: TimingParameter::Limits,
-        p2min,
-        p2max,
-        p3min,
-        p3max,
-        p4min,
-    } = client.interface.next_response()?
-    {
-        client.interface.send(Message::ChangeTimingParameters {
-            p2min,
-            p2max,
-            p3min,
-            p3max,
-            p4min,
-        })?;
-        client.interface.next_response()?;
-        println!("configured timings");
-    }
+    println!("using fast timing");
 
-    client.get_security_access()?;
+    let mut client = client.security_access_timeout_bypass().unwrap();
 
     println!("have pogramming security access");
 
-    let mut file = OpenOptions::new().read(true).open("write_test.bin")?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .open("write_test.bin")
+        .unwrap();
 
     let mut address = memory_layout::BASE_ADDRESS;
     for (n, size) in memory_layout::SECTORS.into_iter().enumerate() {
@@ -118,61 +110,17 @@ fn main() -> Result<(), Error> {
             memory_layout::SECTORS.len(),
             size
         );
-        client.interface.send(Message::RequestDataTransfer {
-            address,
-            size,
-            compression: CompressionFormat::Bosch,
-            encryption: EncryptionFormat::Bosch,
-            transfer_type: TransferType::Download,
-        })?;
-        let mut enc_index = 0;
-        let mut max_len = 0;
 
         let mut data_buf = Vec::with_capacity(size as usize);
-        file.read_exact(&mut data_buf)?;
+        file.read_exact(&mut data_buf).unwrap();
 
-        // uncompressed bytes sent so far
-        let mut sent_bytes = 0;
-        while let Ok(m) = client.interface.next_response() {
-            let send = if let Response::DownloadConfirmation(max) = m {
-                max_len = max as usize;
-                Some(true)
-            } else if let Response::ReadyForMoreData = m {
-                Some(false)
-            } else if let Response::Error(ProcessError {
-                error: ServiceError::RoutineNotComplete,
-                service: ServiceId::RequestDownload,
-            }) = m
-            {
-                continue;
-            } else {
-                dbg!(m);
-                client.disconnect()?;
-                panic!("unexpected");
-            };
+        client.write_data_bosch(address, &data_buf, KEY).unwrap();
 
-            if let Some(first) = send {
-                if sent_bytes >= data_buf.len() {
-                    break;
-                }
-                let (sent, transfer_block) = bcb::encrypt_and_compress(
-                    max_len,
-                    &mut data_buf[sent_bytes..],
-                    &mut enc_index,
-                    memory_layout::KEY,
-                    first,
-                )?;
-
-                client.interface.send(Message::SendData(transfer_block))?;
-
-                sent_bytes += sent;
-            }
-        }
         address += size;
         println!("  done.")
     }
 
-    client.disconnect()?;
+    client.disconnect().unwrap();
 
     println!("disconnected");
 
