@@ -1,9 +1,12 @@
-use std::{fs::OpenOptions, io::Read, time::Duration};
+#![feature(iter_map_windows)]
+
+use std::{fs::OpenOptions, io::Read, io::Write, time::Duration};
 
 use k_line::KLine;
 use kwp2000::{
     client::Client,
     constants::{ServiceError, ServiceId},
+    raw_message::RawMessage,
     response::{ProcessError, Response},
 };
 
@@ -72,52 +75,31 @@ fn main() -> Result<(), Error> {
 
     println!("init done");
 
-    let mut client = match Client::new(Box::new(port)).security_access_timeout_bypass() {
-        Ok(c) => c.programming_mode(Some(38400)).unwrap(),
-        Err((c, e)) => {
-            if let Error::UnexpectedResponse(Response::Error(ProcessError {
-                service: ServiceId::SecurityAccess,
-                error: ServiceError::ServiceNotSupported,
-            })) = e
+    let mut client = Client::new(Box::new(port));
+
+    client.diagnostic_mode().unwrap();
+
+    println!("diagmode");
+
+    let mut file = OpenOptions::new().create(true).write(true).open("mem")?;
+
+    for i in 0..(0x380000 / 0x50) {
+        let addr = 0x380000u32 + (0x50 * i);
+        let bytes = addr.to_be_bytes();
+        if let Ok(data) = client.dd_read_address(addr, 0x50) {
+            file.write_all(&data)?;
+            println!("0x{:06x}", addr);
+
+            if data
+                .into_iter()
+                .map_windows(|[w0, w1, w2, w3]| {
+                    w3 == &bytes[0] && w2 == &bytes[1] && w1 == &bytes[2] && w0 == &bytes[3]
+                })
+                .any(|b| b)
             {
-                c.programming_mode(Some(38400)).unwrap()
-            } else {
-                panic!("{:?}", e);
+                println!("  yay");
             }
         }
-    };
-
-    println!("in programming mode");
-
-    client.use_fastest_timing().unwrap();
-
-    println!("using fast timing");
-
-    let mut client = client.security_access_timeout_bypass().unwrap();
-
-    println!("have pogramming security access");
-
-    let mut file = OpenOptions::new()
-        .read(true)
-        .open("write_test.bin")
-        .unwrap();
-
-    let mut address = memory_layout::BASE_ADDRESS;
-    for (n, size) in memory_layout::SECTORS.into_iter().enumerate() {
-        println!(
-            "starting sector {} of {} with size {}",
-            n + 1,
-            memory_layout::SECTORS.len(),
-            size
-        );
-
-        let mut data_buf = Vec::with_capacity(size as usize);
-        file.read_exact(&mut data_buf).unwrap();
-
-        client.write_data_bosch(address, &data_buf, KEY).unwrap();
-
-        address += size;
-        println!("  done.")
     }
 
     client.disconnect().unwrap();
